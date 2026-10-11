@@ -18,7 +18,7 @@ function fakeRes() {
     writeHead(c, h) { this.statusCode = c; Object.assign(this.headers, h); },
     write(s) { chunks.push(s); return true; },
     send(s) { chunks.push(s); },
-    end() {},
+    end(s) { if (s) chunks.push(s); },
     get body() { return chunks.join(""); },
   };
 }

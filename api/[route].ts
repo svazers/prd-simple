@@ -98,51 +98,54 @@ async function runTool(name: string, args: any): Promise<string> {
 }
 
 export default async function handler(req: any, res: any) {
-  const route = String(req.query?.route ?? "");
-  const payload = req.body ?? {};
-
+  // Plain Node ServerResponse only (res.status()/json() are Next helpers and are
+  // absent when this file is deployed as a standalone function).
   const json = (code: number, obj: unknown) => {
-    res.status(code).setHeader("Content-Type", "application/json; charset=utf-8");
-    res.send(JSON.stringify(obj));
+    res.statusCode = code;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.end(JSON.stringify(obj));
   };
 
-  if (route === "health") return json(200, { ok: true, key: !!process.env.API_KEY });
+  try {
+    const route = String(req.query?.route ?? "");
+    const payload = req.body ?? {};
 
-  if (route === "models")
-    return json(200, {
-      models: Object.entries(MODELS).map(([name, id]) => ({ name, id })),
-      default: DEFAULT_MODEL,
-      limit: DAILY_LIMIT,
-    });
+    if (route === "health") return json(200, { ok: true, key: !!process.env.API_KEY });
 
-  if (route === "feedback" && req.method === "POST") return json(200, { ok: true });
+    if (route === "models")
+      return json(200, {
+        models: Object.entries(MODELS).map(([name, id]) => ({ name, id })),
+        default: DEFAULT_MODEL,
+        limit: DAILY_LIMIT,
+      });
 
-  if (route !== "chat" || req.method !== "POST") return json(404, { error: "not found" });
+    if (route === "feedback" && req.method === "POST") return json(200, { ok: true });
 
-  const key = process.env.API_KEY;
-  if (!key) return json(500, { error: "config", message: "API_KEY belum diisi di Vercel env" });
+    if (route !== "chat" || req.method !== "POST") return json(404, { error: "not found" });
 
-  const mode = String(payload.mode ?? "svazer");
-  const modelId = MODELS[payload.model] ?? payload.model ?? DEFAULT_MODEL;
-  const messages: any[] = [{ role: "system", content: PROMPTS[mode] ?? PROMPTS.svazer }];
-  messages.push(
-    ...(payload.messages ?? [])
-      .filter((m: any) => m.role === "user" || m.role === "assistant")
-      .map((m: any) => ({ role: m.role, content: String(m.content ?? "").slice(0, 8000) }))
-      .slice(-12) // ponytail: hard context trim, oldest dropped first
-  );
-  if (!messages.length || messages[messages.length - 1].role !== "user")
-    return json(400, { error: "bad request", message: "pesan kosong" });
+    const key = process.env.API_KEY;
+    if (!key) return json(500, { error: "config", message: "API_KEY belum diisi di Vercel env" });
 
-  const useTools = !!payload.tools;
+    const mode = String(payload.mode ?? "svazer");
+    const modelId = MODELS[payload.model] ?? payload.model ?? DEFAULT_MODEL;
+    const messages: any[] = [{ role: "system", content: PROMPTS[mode] ?? PROMPTS.svazer }];
+    messages.push(
+      ...(payload.messages ?? [])
+        .filter((m: any) => m.role === "user" || m.role === "assistant")
+        .map((m: any) => ({ role: m.role, content: String(m.content ?? "").slice(0, 8000) }))
+        .slice(-12) // ponytail: hard context trim, oldest dropped first
+    );
+    if (!messages.length || messages[messages.length - 1].role !== "user")
+      return json(400, { error: "bad request", message: "pesan kosong" });
 
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream; charset=utf-8",
-    "Cache-Control": "no-cache, no-transform",
-    Connection: "keep-alive",
-  });
+    const useTools = !!payload.tools;
 
-  const send = (obj: unknown) => res.write("data: " + JSON.stringify(obj) + "\n\n");
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+
+    const send = (obj: unknown) => res.write("data: " + JSON.stringify(obj) + "\n\n");
 
   try {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
@@ -232,10 +235,17 @@ export default async function handler(req: any, res: any) {
       }
     }
     send({ type: "done" });
+    } catch (e: any) {
+      try {
+        send({ type: "error", message: "Provider unreachable: " + e.message });
+      } catch {}
+    }
+    res.end();
   } catch (e: any) {
-    send({ type: "error", message: "Provider unreachable: " + e.message });
+    try {
+      json(500, { error: "internal", message: String(e?.message ?? e) });
+    } catch {}
   }
-  res.end();
 }
 
 // ponytail: no per-IP quota here — a serverless function has no shared store.
