@@ -7,3 +7,4 @@ out/
 .feedback.jsonl
 *.log
 .DS_Store
+tsconfig.tsbuildinfo
