@@ -47,4 +47,16 @@ node tests/md_renderer.test.js      # cek renderer markdown
 
 ## Deploy
 
+### Vercel
+
+Repo ini sudah siap deploy ke Vercel (static export + serverless function pengganti `server.py`):
+
+1. Import repo di Vercel.
+2. Set environment variable **`API_KEY`** (Settings → Environment Variables). Tanpa ini, `/api/chat` membalas 500 `API_KEY belum diisi di Vercel env`.
+3. Deploy. `vercel.json` sudah mengarahkan `/api/chat`, `/api/models`, `/api/health`, `/api/feedback` ke `api/index.py`.
+
+Catatan: di Vercel tidak ada kuota per-IP (serverless tanpa state bersama) — tambahkan Upstash/Vercel KV kalau perlu.
+
+### VPS / tunnel
+
 Static export (`out/`) bisa di-host di mana saja. Untuk fitur chat, `server.py` harus jalan di belakang reverse proxy + tunnel (cloudflared quick tunnel sudah teruji).

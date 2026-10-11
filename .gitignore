@@ -8,3 +8,5 @@ out/
 *.log
 .DS_Store
 tsconfig.tsbuildinfo
+__pycache__/
+*.pyc

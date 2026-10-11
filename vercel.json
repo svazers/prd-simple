@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "next build",
+  "rewrites": [
+    { "source": "/api/chat", "destination": "/api/index?route=chat" },
+    { "source": "/api/models", "destination": "/api/index?route=models" },
+    { "source": "/api/health", "destination": "/api/index?route=health" },
+    { "source": "/api/feedback", "destination": "/api/index?route=feedback" }
+  ]
+}
