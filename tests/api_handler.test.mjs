@@ -1,27 +1,21 @@
-// Local check for api/[route].ts logic: strips types, runs the real handler
-// against a fake req/res and the real provider.
+// Local check for app/api/[route]/route.api.ts (the Vercel backend).
+// Uses the Web fetch API shapes the route handler expects.
 // Run: node --experimental-strip-types tests/api_handler.test.mjs
-import handler from "../api/[route].ts";
+import { GET, POST } from "../app/api/[route]/route.api.ts";
 import { readFileSync } from "node:fs";
 
 const env = readFileSync(new URL("../.env", import.meta.url), "utf8");
-const key = env.split("\n").find((l) => l.startsWith("API_KEY="))?.split("=").slice(1).join("=").trim();
-process.env.API_KEY = key;
+process.env.API_KEY = env
+  .split("\n")
+  .find((l) => l.startsWith("API_KEY="))
+  ?.split("=")
+  .slice(1)
+  .join("=")
+  .trim();
 
-function fakeRes() {
-  const chunks = [];
-  return {
-    statusCode: 0,
-    headers: {},
-    status(c) { this.statusCode = c; return this; },
-    setHeader(k, v) { this.headers[k] = v; },
-    writeHead(c, h) { this.statusCode = c; Object.assign(this.headers, h); },
-    write(s) { chunks.push(s); return true; },
-    send(s) { chunks.push(s); },
-    end(s) { if (s) chunks.push(s); },
-    get body() { return chunks.join(""); },
-  };
-}
+const ctx = (route) => ({ params: Promise.resolve({ route }) });
+const post = (route, body) =>
+  POST(new Request("http://local/api/" + route, { method: "POST", body: JSON.stringify(body) }), ctx(route));
 
 let fails = 0;
 const check = (name, cond, extra = "") => {
@@ -30,49 +24,53 @@ const check = (name, cond, extra = "") => {
 };
 
 // 1) health
-let res = fakeRes();
-await handler({ query: { route: "health" }, method: "GET" }, res);
-check("health 200 + key true", res.statusCode === 200 && JSON.parse(res.body).key === true, res.body);
+let r = await GET(new Request("http://local/api/health"), ctx("health"));
+const health = await r.json();
+check("health 200 + key true", r.status === 200 && health.key === true, JSON.stringify(health));
 
 // 2) models
-res = fakeRes();
-await handler({ query: { route: "models" }, method: "GET" }, res);
-const m = JSON.parse(res.body);
-check("models has 5", m.models.length === 5, res.body);
+r = await GET(new Request("http://local/api/models"), ctx("models"));
+const m = await r.json();
+check("models has 5", m.models.length === 5, JSON.stringify(m).slice(0, 80));
 check("models default", m.default === "GPT 6 Luna");
+check("models limit", m.limit === 20);
 
 // 3) unknown route
-res = fakeRes();
-await handler({ query: { route: "nope" }, method: "GET" }, res);
-check("unknown -> 404", res.statusCode === 404);
+r = await GET(new Request("http://local/api/nope"), ctx("nope"));
+check("unknown -> 404", r.status === 404);
 
 // 4) chat without key -> 500 config
 const saved = process.env.API_KEY;
 delete process.env.API_KEY;
-res = fakeRes();
-await handler({ query: { route: "chat" }, method: "POST", body: { messages: [{ role: "user", content: "hi" }] } }, res);
-check("chat no key -> 500 config", res.statusCode === 500 && JSON.parse(res.body).error === "config");
+r = await post("chat", { messages: [{ role: "user", content: "hi" }] });
+const noKey = await r.json();
+check("chat no key -> 500 config", r.status === 500 && noKey.error === "config", JSON.stringify(noKey));
 process.env.API_KEY = saved;
 
-// 5) chat happy path (real provider): must emit delta frames + done
-res = fakeRes();
-await handler(
-  { query: { route: "chat" }, method: "POST", body: { mode: "svazer", model: "GPT 6 Luna", messages: [{ role: "user", content: "Balas persis satu kata: ok" }] } },
-  res
-);
-const frames = res.body.split("\n\n").filter(Boolean).map((f) => JSON.parse(f.slice(6)));
+// 5) chat validation -> 400
+r = await post("chat", { messages: [{ role: "assistant", content: "x" }] });
+check("chat last msg not user -> 400", r.status === 400);
+
+// 6) chat happy path (real provider)
+r = await post("chat", {
+  mode: "svazer",
+  model: "GPT 6 Luna",
+  messages: [{ role: "user", content: "Balas persis satu kata: ok" }],
+});
+check("chat -> 200 SSE", r.status === 200 && String(r.headers.get("content-type")).includes("text/event-stream"));
+const body = await r.text();
+const frames = body.split("\n\n").filter(Boolean).map((f) => JSON.parse(f.slice(6)));
 const kinds = frames.map((f) => f.type);
-check("chat SSE headers", String(res.headers["Content-Type"]).includes("text/event-stream"), JSON.stringify(res.headers));
 check("chat has done frame", kinds.includes("done"), kinds.join(","));
 const text = frames.filter((f) => f.type === "delta").map((f) => f.text).join("");
 const err = frames.find((f) => f.type === "error");
 // Either the model streamed text, or the provider refused and we reported it.
 check("chat streamed text or explained", text.length > 0 || !!err, kinds.join(","));
-if (err) console.log("note: provider said ->", err.message.slice(0, 120));
+if (err) console.log("note: provider said ->", err.message.slice(0, 110));
 
-// 6) tool loop reaches the handler (get_datetime is local, no provider round needed)
-const dt = await (await import("../api/[route].ts")).default;
-check("module exports a default handler", typeof dt === "function");
+// 7) feedback
+r = await post("feedback", { index: 0, rating: 1 });
+check("feedback -> ok", r.status === 200 && (await r.json()).ok === true);
 
 if (fails) { console.error(fails + " failure(s)"); process.exit(1); }
 console.log("api handler test ok");
